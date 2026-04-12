@@ -1,0 +1,50 @@
+name: Build AVDVPlus CoreELEC
+
+on:
+  workflow_dispatch:  # 手动触发编译
+  push:
+    branches:
+      - master
+    paths-ignore:
+      - "*.md"
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 420  # 最大7小时，足够编译完
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            git build-essential bc libncurses5-dev libssl-dev \
+            flex bison gperf python3 python3-pip python3-setuptools \
+            zip unzip wget curl rsync ccache
+
+      - name: Create swap to avoid OOM
+        run: |
+          sudo fallocate -l 16G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
+
+      - name: Build with make image
+        run: |
+          export USE_CCACHE=1
+          export CCACHE_DIR=/tmp/ccache
+          ccache -M 30G
+          make -j4 image
+
+      - name: Upload firmware from target folder
+        uses: actions/upload-artifact@v4
+        with:
+          name: coreelec-firmware
+          path: target/*
+          retention-days: 7
