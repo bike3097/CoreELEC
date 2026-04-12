@@ -1,40 +1,94 @@
-name: Build CoreELEC Image (No Docker)
+name: CoreELEC 稳定编译流水线
 on:
+  # 手动触发（推荐，避免误跑消耗时长）
   workflow_dispatch:
+  # 可选：推送代码到main分支自动触发
+  # push:
+  #   branches: [ main ]
 
 jobs:
-  build:
+  build-coreelec:
     runs-on: ubuntu-latest
     env:
+      # 解决Node.js 20弃用警告，提前适配Node.js 24
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      # CoreELEC编译配置（按需修改设备型号）
+      CE_PROJECT: Amlogic-ce
+      CE_DEVICE: AMLGX
+      CE_ARCH: arm64
+      CE_BRANCH: coreelec-21-cpm
+
     steps:
-      - name: 扩容磁盘 + 增加 8GB 交换分区
+      - name: 🔧 磁盘扩容200G+ | 内存扩容总32G（物理16G+虚拟16G）
         uses: easimon/maximize-build-space@master
         with:
-          root_reserve_mb: '10000'
-          swap_size_mb: '8192'
+          # 核心参数：16GB虚拟内存swap
+          swap-size-mb: 16384
+          # 根分区仅预留1GB，剩余全部给编译空间，最大化磁盘
+          root-reserve-mb: 1024
+          temp-reserve-mb: 100
+          # 清理所有无用预装软件，腾出超100GB磁盘空间
+          remove-dotnet: true
+          remove-android: true
+          remove-haskell: true
+          remove-codeql: true
+          remove-docker-images: true
+          # 编译空间挂载路径
+          build-mount-path: ${{ github.workspace }}
 
-      - name: 安装编译依赖
+      - name: 📊 验证扩容结果（磁盘+内存）
+        run: |
+          echo "===== 内存&虚拟内存信息 ====="
+          sudo free -h
+          echo -e "\n===== 磁盘分区信息 ====="
+          sudo df -h
+          echo -e "\n===== 当前工作目录 ====="
+          pwd && ls -la
+
+      - name: 📥 拉取CoreELEC源码（修复拉取失败问题，带重试机制）
+        run: |
+          # 重试3次拉取源码，解决网络波动导致的fetch失败
+          for i in {1..3}; do
+            git clone --depth=1 -b ${{ env.CE_BRANCH }} https://github.com/CoreELEC/CoreELEC.git && break
+            echo "拉取失败，等待10秒后重试第$i次..."
+            sleep 10
+          done
+          # 验证源码是否拉取成功
+          if [ ! -d "CoreELEC" ]; then
+            echo "❌ 源码拉取最终失败，请检查网络/分支是否存在"
+            exit 1
+          fi
+          echo "✅ 源码拉取成功，分支：${{ env.CE_BRANCH }}"
+          cd CoreELEC && pwd && ls -la
+
+      - name: 📦 安装编译全量依赖
         run: |
           sudo apt-get update
-          sudo apt-get install -y git make gcc g++ bison flex libssl-dev libncurses5-dev \
-            libbz2-dev libreadline-dev libelf-dev liblzma-dev python3 python3-pip \
-            python3-setuptools python3-wheel python3-dev unzip wget curl
+          sudo apt-get install -y \
+            git make gcc g++ bison flex libssl-dev libncurses5-dev \
+            libbz2-dev libreadline-dev libelf-dev liblzma-dev \
+            python3 python3-pip python3-setuptools python3-wheel python3-dev \
+            unzip wget curl bc cpio rsync xz-utils zstd
+          # 验证依赖安装完成
+          echo "✅ 编译依赖安装完成"
 
-      - name: 拉取 CoreELEC 源码
-        uses: actions/checkout@v4
-        with:
-          repository: CoreELEC/CoreELEC
-          ref: coreelec-21-cpm
-          path: CoreELEC
-
-      - name: 编译 CoreELEC（限制 2 线程）
+      - name: 🔨 编译CoreELEC镜像（防OOM优化）
         run: |
           cd CoreELEC
-          PROJECT=Amlogic-ce DEVICE=AMLGX ARCH=arm64 make -j2
+          # 限制2线程编译，避免内存溢出，适配32G总内存
+          PROJECT=${{ env.CE_PROJECT }} DEVICE=${{ env.CE_DEVICE }} ARCH=${{ env.CE_ARCH }} ./build -j2
+          echo "✅ 编译完成，产物目录："
+          ls -la target/
 
-      - name: 上传编译产物
+      - name: 📤 上传编译产物
         uses: actions/upload-artifact@v4
+        with:
+          name: CoreELEC-${{ env.CE_DEVICE }}-镜像
+          path: |
+            CoreELEC/target/*.img.gz
+            CoreELEC/target/*.img
+        # 仅编译成功时执行上传
+        if: success()        uses: actions/upload-artifact@v4
         with:
           name: CoreELEC-Image
           path: CoreELEC/target/*.img.gz
