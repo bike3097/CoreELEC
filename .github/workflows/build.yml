@@ -1,7 +1,7 @@
 name: Build AVDVPlus CoreELEC
 
 on:
-  workflow_dispatch:  # 手动触发编译
+  workflow_dispatch:  # 手动触发
   push:
     branches:
       - master
@@ -11,7 +11,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 420  # 最大7小时，足够编译完
+    timeout-minutes: 360 # 360分钟超时，防止编译中途被砍
 
     steps:
       - name: Checkout code
@@ -27,24 +27,17 @@ jobs:
             flex bison gperf python3 python3-pip python3-setuptools \
             zip unzip wget curl rsync ccache
 
-      - name: Create swap to avoid OOM
-        run: |
-          sudo fallocate -l 16G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
-          free -h
-
-      - name: Build with make image
+      # 🔥 重点：删除了创建16G Swap的步骤，因为Actions环境不需要
+      - name: Build CoreELEC Image
         run: |
           export USE_CCACHE=1
           export CCACHE_DIR=/tmp/ccache
-          ccache -M 30G
-          make -j4 image
+          ccache -M 30G # 设置缓存大小
+          make -j4 image # 编译并生成tar包
 
-      - name: Upload firmware from target folder
+      - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: coreelec-firmware
-          path: target/*
-          retention-days: 7
+          name: CoreELEC-AVDVPlus-Firmware
+          path: target/* # 上传target下所有文件（包含tar和img）
+          retention-days: 7 # 保留7天
