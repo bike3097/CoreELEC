@@ -1,50 +1,40 @@
-name: Build AVDVPlus CoreELEC
-
+name: Build CoreELEC Image
 on:
-  workflow_dispatch:  # 手动触发编译
-  push:
-    branches:
-      - master
-    paths-ignore:
-      - "*.md"
+  workflow_dispatch: # 手动触发，避免误跑
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 420  # 最大7小时，足够完整编译
-
+    runs-on: ubuntu-latest
+    # 解决 Node.js 20 警告，提前切换到 Node.js 24
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
-      - name: Checkout code
+      - name: 扩容磁盘 + 增加 8GB 交换分区（解决磁盘/内存不足）
+        uses: easimon/maximize-build-space@master
+        with:
+          root_reserve_mb: '10000'
+          swap_size_mb: '8192'
+
+      - name: 拉取代码
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Install ALL required dependencies
+      - name: 用官方 Docker 镜像编译 CoreELEC（限制线程防OOM）
         run: |
-          sudo apt update
-          sudo apt install -y \
-            git build-essential bc libncurses5-dev libssl-dev \
-            flex bison gperf python3 python3-pip python3-setuptools \
-            zip unzip wget curl rsync ccache \
-            xfonts-utils rdfind libparse-yapp-perl xsltproc \
-            libxml-parser-perl patchutils lzop
+          docker pull coreelec/coreelec-builder:latest
+          docker run -v $(pwd):/build -h coreelec coreelec/coreelec-builder:latest /bin/bash -c "
+            cd /build
+            # 克隆最新源码（已有源码可删除此步）
+            git clone --depth=1 https://github.com/CoreELEC/CoreELEC.git
+            cd CoreELEC
+            # 关键：-j2 限制 2 线程编译，避免内存溢出
+            PROJECT=Amlogic-ce DEVICE=AMLGX ARCH=arm64 ./build -j2
+          "
 
-      - name: Build CoreELEC Image
-        run: |
-          export USE_CCACHE=1
-          export CCACHE_DIR=/tmp/ccache
-          ccache -M 30G
-          make -j4 image
-
-      - name: Upload firmware from target folder
+      - name: 上传编译产物（仅成功时执行）
         uses: actions/upload-artifact@v4
         with:
-          name: CoreELEC-AVDVPlus-Firmware
-          path: target/*.tar
-          retention-days: 7
-      - name: Upload firmware
-        uses: actions/upload-artifact@v4
-        with:
-          name: CoreELEC-AVDVPlus-Firmware
-          path: target/* # 上传target下所有文件（包含tar和img）
-          retention-days: 7 # 保留7天
+          name: CoreELEC-Image
+          path: |
+            CoreELEC/target/*.img.gz
+            CoreELEC/target/*.img
+        if: success()
