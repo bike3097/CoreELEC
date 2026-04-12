@@ -1,7 +1,7 @@
 name: Build AVDVPlus CoreELEC
 
 on:
-  workflow_dispatch:  # 手动触发
+  workflow_dispatch:  # 手动触发编译
   push:
     branches:
       - master
@@ -11,7 +11,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 360 # 360分钟超时，防止编译中途被砍
+    timeout-minutes: 420  # 最大7小时，足够完整编译
 
     steps:
       - name: Checkout code
@@ -19,22 +19,29 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install dependencies
+      - name: Install ALL required dependencies
         run: |
           sudo apt update
           sudo apt install -y \
             git build-essential bc libncurses5-dev libssl-dev \
             flex bison gperf python3 python3-pip python3-setuptools \
-            zip unzip wget curl rsync ccache
+            zip unzip wget curl rsync ccache \
+            xfonts-utils rdfind libparse-yapp-perl xsltproc \
+            libxml-parser-perl patchutils lzop
 
-      # 🔥 重点：删除了创建16G Swap的步骤，因为Actions环境不需要
       - name: Build CoreELEC Image
         run: |
           export USE_CCACHE=1
           export CCACHE_DIR=/tmp/ccache
-          ccache -M 30G # 设置缓存大小
-          make -j4 image # 编译并生成tar包
+          ccache -M 30G
+          make -j4 image
 
+      - name: Upload firmware from target folder
+        uses: actions/upload-artifact@v4
+        with:
+          name: CoreELEC-AVDVPlus-Firmware
+          path: target/*.tar
+          retention-days: 7
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
